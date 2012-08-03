@@ -71,11 +71,11 @@
 (defun capture-mylife:capture-type 'nil)
 
 (defun capture-mylife:capture-command-frame (file)
-  (cond ((executable-find "scrot") (format "scrot -u -b %s" file))
+  (cond ((executable-find "scrot") (format "scrot -z -u -b %s" file))
         (t (error "Sorry cannot take frame screnshot on your platform"))))
 
 (defun capture-mylife:capture-command-desktop (file)
-  (cond ((executable-find "scrot") (format "scrot -b %s" file))
+  (cond ((executable-find "scrot") (format "scrot -z -b %s" file))
         ((executable-find "import") (format "import -window root %s" file))
         (t (error "Sorry cannot take frame screnshot on your platform"))))
 
