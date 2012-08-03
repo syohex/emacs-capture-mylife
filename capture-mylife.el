@@ -85,7 +85,7 @@
          (format "scrot -z -u -b %s" file))))
 
 (defmacro capture-mylife:has-desktop-command-p (cmd)
-  `(string= capture-mylife:capture-command-desktop ,cmd))
+  `(string= capture-mylife:capture-desktop-executable ,cmd))
 
 (defun capture-mylife:capture-command-desktop (file)
   (cond ((capture-mylife:has-desktop-command-p "scrot")
