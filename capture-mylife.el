@@ -152,7 +152,7 @@
 (defun capture-mylife:format-output-size (default)
   (if default
       (format "Output size(default %s): " default)
-    (format "Output size: ")))
+    (format "Output size(like 800x600): ")))
 
 (defun capture-mylife:read-output-scale ()
   (let (width height default)
