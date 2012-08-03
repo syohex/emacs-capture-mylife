@@ -35,59 +35,73 @@
   :group 'image
   :prefix 'capture-mylife:)
 
-(defcustom capture-mylife:period 5
-  "Capturing period of seconds"
-  :type  'integer
-  :group 'capture-mylife)
-
 (defcustom capture-mylife:temporary-directory
   (expand-file-name "~/.emacs.d/capture-mylife/")
   "Directory for temporary capture images"
   :type 'string
   :group 'capture-mylife)
 
-(defcustom capture-mylife:frame-ratio 1
-  "Output frame size"
-  :type  'number
-  :group 'caputre-mylife)
-
-(defcustom capture-mylife:fps 5
-  "Frame per second"
-  :type  'integer
-  :group 'caputre-mylife)
-
-(defvar capture-mylife:capture-executable
+(defvar capture-mylife:capture-active-executable
   (case system-type
-    (gnu/linux "import")
-    (otherwise (error "Sorry support only Linux"))))
+    (gnu/linux "scrot")
+    (otherwise nil)))
 
-(defvar capture-mylife:animate-executable
+(defmacro capture-mylife:system-p (sys)
+  `(eq system-type ,sys))
+
+(defun capture-mylife:platform-capture-desktop-executables ()
+  (cond ((capture-mylife:system-p 'gnu/linux)  '("scrot" "import"))
+        ((capture-mylife:system-p 'darwin)     '("screencapture"))
+        ((capture-mylife:system-p 'windows-nt) '("nircmd.exe"))))
+
+(defun capture-mylife:search-executable (execs)
+  (loop for exe in execs
+        when (executable-find exe)
+        return exe))
+
+(defvar capture-mylife:capture-desktop-executable
+  (let* ((execs (capture-mylife:platform-capture-desktop-executables))
+         (exec  (capture-mylife:search-executable execs)))
+    (or exec
+        (error (format "Please install %s"
+                       (mapconcat 'identify execs " or "))))))
+
+(defvar capture-mylife:convert-movie-executable
   (cond ((executable-find "avconv") "avconv")
         ((executable-find "ffmpeg") "ffmpeg")
-        (t (error "Please install `avconv' or `ffmpeg'"))))
+        (t nil)))
 
 (defvar capture-mylife:timer)
-
-(defun capture-mylife:capture-type 'nil)
-
-(defun capture-mylife:capture-command-frame (file)
-  (cond ((executable-find "scrot") (format "scrot -z -u -b %s" file))
-        (t (error "Sorry cannot take frame screnshot on your platform"))))
-
-(defun capture-mylife:capture-command-desktop (file)
-  (cond ((executable-find "scrot") (format "scrot -z -b %s" file))
-        ((executable-find "import") (format "import -window root %s" file))
-        (t (error "Sorry cannot take frame screnshot on your platform"))))
-
-(defun capture-mylife:capture-command (type file)
-  (setq capture-mylife:capture-type type)
-  (if (string= type "frame")
-      (capture-mylife:capture-command-frame file)
-    (capture-mylife:capture-command-desktop file)))
-
 (defvar capture-mylife:file-index 0)
 (defvar capture-mylife:file-format "%08d.png")
 (defvar capture-mylife:type nil)
+(defvar capture-mylife:cycle nil)
+
+(defmacro capture-mylife:has-active-command-p (cmd)
+  `(string= capture-mylife:capture-active-executable ,cmd))
+
+(defun capture-mylife:capture-command-active (file)
+  (cond ((capture-mylife:has-active-command-p "scrot")
+         (format "scrot -z -u -b %s" file))))
+
+(defmacro capture-mylife:has-desktop-command-p (cmd)
+  `(string= capture-mylife:capture-command-desktop ,cmd))
+
+(defun capture-mylife:capture-command-desktop (file)
+  (cond ((capture-mylife:has-desktop-command-p "scrot")
+         (format "scrot -z -b %s" file))
+        ((capture-mylife:has-desktop-command-p "import")
+         (format "import -window root %s" file))
+        ((capture-mylife:has-desktop-command-p "screencapture")
+         (format "screencapture -x %s" file))
+        ((capture-mylife:has-desktop-command-p "nircmd.exe")
+         (format "nircmd.exe savescreenshot %s" file))
+        (t (error "Sorry cannot take frame screnshot on your platform"))))
+
+(defun capture-mylife:capture-command (type file)
+  (if (capture-mylife:type-active-p type)
+      (capture-mylife:capture-command-active file)
+    (capture-mylife:capture-command-desktop file)))
 
 (defun capture-mylife:next-file ()
   (let ((file (concat
@@ -107,35 +121,56 @@
          (when (eq status 'exit)
            (delete-process process)))))))
 
+(defun* capture-mylife:type-active-p (&optional (type capture-mylife:type))
+  (string= type "active"))
+
 (defun capture-mylife:frame-width ()
-  (if (string= capture-mylife:type "frame")
+  (if (capture-mylife:type-active-p)
       (frame-pixel-width)
     (display-pixel-width)))
 
 (defun capture-mylife:frame-height ()
-  (if (string= capture-mylife:type "frame")
+  (if (capture-mylife:type-active-p)
       (frame-pixel-height)
     (display-pixel-height)))
 
-(defun capture-mylife:output-scale ()
-  (let ((width  (capture-mylife:frame-width))
-        (height (capture-mylife:frame-height)))
-    (format "%dx%d"
-            (floor (* width  capture-mylife:frame-ratio))
-            (floor (* height capture-mylife:frame-ratio)))))
+(defun capture-mylife:format-output-scale (width height ratio)
+  (format "%dx%d" (floor (* width  ratio)) (floor (* height ratio))))
 
-(defun capture-mylife:command-ffmpeg (file)
+(defun capture-mylife:command-ffmpeg (output scale fps)
   (format "%s -y -f image2 -r %d -i \"%s\" -s %s %s"
-          capture-mylife:animate-executable
-          capture-mylife:fps
+          capture-mylife:convert-movie-executable
+          fps
           (concat (file-name-as-directory capture-mylife:temporary-directory)
                   capture-mylife:file-format)
-          (capture-mylife:output-scale)
-          file))
+          scale
+          output))
+
+(defun capture-mylife:x-style-p (str)
+  (string-match "^[1-9][0-9]*x[1-9][0-9]*$" str))
+
+(defun capture-mylife:format-output-size (default)
+  (if default
+      (format "Output size(default %s): " default)
+    (format "Output size: ")))
+
+(defun capture-mylife:read-output-scale ()
+  (let (width height default)
+    (when (and window-system capture-mylife:type)
+      (setq width (capture-mylife:frame-width)
+            height (capture-mylife:frame-height)
+            default (format "%dx%d" width height)))
+    (let* ((input (read-string (capture-mylife:format-output-size default)
+                               nil nil default))
+           (input-obj (car (read-from-string input))))
+      (cond ((capture-mylife:x-style-p input) input)
+            ((and default (numberp input-obj))
+             (capture-mylife:format-output-scale width height ratio))
+            (t (error (format "Invalid output scale: %s" input)))))))
 
 (defun capture-mylife:support-encoding-formats ()
   (with-temp-buffer
-    (let ((cmd capture-mylife:animate-executable))
+    (let ((cmd capture-mylife:convert-movie-executable))
       (unless (zerop (call-process-shell-command
                       (format "%s -formats" cmd) nil t))
         (error "Failed: check support encodings"))
@@ -144,31 +179,41 @@
             collect (match-string-no-properties 1)))))
 
 (defun capture-mylife:time-to-string ()
-  (format-time-string "%Y-%m%d-%H%M" (current-time)))
+  (format-time-string "%Y-%m%d-%H%M%S" (current-time)))
 
 (defun capture-mylife:read-format ()
-  (completing-read "format(default avi): "
+  (completing-read "format (default avi): "
                    (capture-mylife:support-encoding-formats)
                    nil t nil nil "avi"))
 
 (defun capture-mylife:output-file (format)
   (format "%s.%s" (capture-mylife:time-to-string) format))
 
-(defun capture-mylife:animate-captures ()
-  (interactive)
-  (let* ((format (capture-mylife:read-format))
-         (output (capture-mylife:output-file format))
-         (cmd (capture-mylife:command-ffmpeg output))
+(defun capture-mylife:convert-movie-command (output scale fps)
+  (cond ((member capture-mylife:convert-movie-executable '("avconv" "ffmpeg"))
+         (capture-mylife:command-ffmpeg output scale fps))
+        (t (error "Please install `avconv' or `ffmpeg'"))))
+
+(defun capture-mylife:convert-movie (outformat scale fps)
+  (interactive
+   (list (capture-mylife:read-format)
+         (capture-mylife:read-output-scale)
+         (read-number "frame per second: " 10)))
+  (let* ((output (concat capture-mylife:temporary-directory
+                         (capture-mylife:output-file outformat)))
+         (cmd (capture-mylife:convert-movie-command output scale fps))
          (buf (get-buffer-create "*capture mylife*")))
     (set-process-sentinel
      (start-process-shell-command "capture mylife" buf cmd)
-     'capture-mylife:animate-sentinel)))
+     (capture-mylife:create-convert-sentinel output))))
 
-(defun capture-mylife:animate-sentinel (process state)
-  (let ((status (process-status process)))
-    (when (eq status 'exit)
-      (message "Finish animated")
-      (delete-process process))))
+(defun capture-mylife:create-convert-sentinel (output)
+  (lexical-let ((file output))
+    (lambda (process state)
+      (let ((status (process-status process)))
+        (when (eq status 'exit)
+          (message "Finish converting and output to %s" file)
+          (delete-process process))))))
 
 (defun capture-mylife:remove-old-images ()
   (let ((imgs (directory-files capture-mylife:temporary-directory t "\.png$")))
@@ -181,18 +226,26 @@
   (capture-mylife:remove-old-images)
   (setq capture-mylife:file-index 0))
 
-(defun capture-mylife:set-handler (type)
-  (run-at-time 0 capture-mylife:period 'capture-mylife:timer-handler type))
+(defun capture-mylife:set-handler (type cycle)
+  (let ((timer (run-at-time 0 cycle 'capture-mylife:timer-handler type)))
+    (setq capture-mylife:type type
+          capture-mylife:cycle cycle
+          capture-mylife:timer timer)))
 
 (defun capture-mylife:read-capture-type ()
-  (completing-read "Type >> " '("desktop" "frame") nil t))
+  (if capture-mylife:capture-active-executable
+      (completing-read "Capture type: " '("desktop" "active") nil t)
+    "desktop"))
 
-(defun capture-mylife:start (type)
+(defun capture-mylife:read-capture-cycle ()
+  (read-number "Capture cycle: " 10))
+
+(defun capture-mylife:start (type cycle)
   (interactive
-   (list (capture-mylife:read-capture-type)))
-  (setq capture-mylife:type type)
+   (list (capture-mylife:read-capture-type)
+         (capture-mylife:read-capture-cycle)))
   (capture-mylife:initialize)
-  (setq capture-mylife:timer (capture-mylife:set-handler type)))
+  (capture-mylife:set-handler type cycle))
 
 (defun capture-mylife:latest-index ()
   (let ((imgs (directory-files capture-mylife:temporary-directory nil "\.png$")))
@@ -202,18 +255,20 @@
       (if (string-match "^0*\\([1-9][0-9]*\\)\.png$" latest-img)
           (string-to-int (match-string-no-properties 1 latest-img))))))
 
-(defun capture-mylife:continue ()
+(defun capture-mylife:continue (type cycle)
   "Continue to capture"
-  (interactive)
+  (interactive
+   (list
+    (or capture-mylife:type (capture-mylife:read-capture-type))
+    (or capture-mylife:cycle (capture-mylife:read-capture-cycle))))
   (setq capture-mylife:file-index (1+ (capture-mylife:latest-index)))
-  (let ((type (or capture-mylife:type (capture-mylife:read-capture-type))))
-    (setq capture-mylife:timer (capture-mylife:set-handler type))))
+  (capture-mylife:set-handler type cycle))
 
-(defun capture-mylife:finish ()
+(defun capture-mylife:stop ()
   "Finish captureing"
   (interactive)
   (cancel-timer capture-mylife:timer)
   (setq capture-mylife:timer nil)
-  (capture-mylife:animate-captures))
+  (message "Stop capturing. Exec `capture-mylife:convert-movie', if you get movie"))
 
 ;;; capture-mylife.el ends here
