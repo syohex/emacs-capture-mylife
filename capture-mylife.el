@@ -271,4 +271,6 @@
   (setq capture-mylife:timer nil)
   (message "Stop capturing. Exec `capture-mylife:convert-movie', if you get movie"))
 
+(provide 'capture-mylife)
+
 ;;; capture-mylife.el ends here
